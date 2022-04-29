@@ -1,24 +1,35 @@
 
-#include <ESP8266WiFi.h>
+#include <ArduinoOTA.h>
 #include <SoftwareSerial.h> // defining the software serial library
+#include <ESP8266WiFi.h>
+#include <PubSubClient.h>
 
 //SoftwareSerial stateSerial(D6,D5); // RX=D6,TX=D5，用于传送relay/led state的软串口
-SoftwareSerial ctlSerial(D8,D7); //RX=D8,TX=D7,用于控制灯泡开关的软串口
+SoftwareSerial ctlSerial(D8,D7); // RX=D8,TX=D7,用于控制灯泡开关的软串口
 
-// Add wifi access point credentials
 const char* ssid = "finEsp8266";
 const char* password = "123456li";
 
-WiFiServer server(80);// Set port to 80
+// MQTT Broker
+const char *mqtt_broker = "124.222.94.149";
+const char *topic = "lamp";
+const char *topic2 = "ctl";
+const char *mqtt_username = "admin";
+const char *mqtt_password = "123312";
+const int mqtt_port = 1883;
 
-String header, ledState; // This stores the HTTP request
-int govern;  //是否开启远程管理模式，govern=1: 是，govern=0: 否
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
+String sensorState;
+String client_id;  // mqtt client id
+long lastMsg = 0;  // 记录上一次发送信息的时长
 
 void setup() {
   Serial.begin(9600);
-  //stateSerial.begin(9600);
+//  stateSerial.begin(9600);
   ctlSerial.begin(9600);
-  //connect to access point
+  
+  //connecting to a WiFi network---------------------------
   WiFi.begin(ssid, password);
   Serial.print("Connecting to ");
   Serial.println(ssid);
@@ -30,116 +41,85 @@ void setup() {
   Serial.println("");
   Serial.println("WiFi connected.");
   Serial.println("IP address: ");
-  Serial.println(WiFi.localIP()); // this will display the Ip address of the Pi which should be entered into your browser
-  server.begin();
-  ledState = "0";
-  govern = 0;
+  Serial.println(WiFi.localIP()); // this will display the Ip address of the nodemcu which should be entered into your browser
+  //WiFi----------------------------------------------------
+
+  //set mqtt client id
+  client_id = "esp8266-client-";
+  client_id += String(WiFi.macAddress());
+  //set mqtt broker
+  mqttClient.setServer(mqtt_broker, mqtt_port);
+  mqttClient.setCallback(callback);  // 设定回调方法，当ESP8266收到订阅消息时会调用此方法
+  sensorState = "null";
+
+  // OTA设置并启动
+  ArduinoOTA.setHostname("ESP8266OTA");
+  ArduinoOTA.setPassword("123");
+  ArduinoOTA.begin();
+  Serial.println("OTA ready");
 }
 
-void loop(){
-  WiFiClient client = server.available();   // Listen for incoming clients，client对象也用来发送服务器（这里的esp8266）的响应信息
-  if (client) {                             // If a new client connects,
-    Serial.println("+++");
-    getLedState();                          //update led state
-    //if(ledState == "") ledState="0";
-    //if(ledState.indexOf('\n') >= 0) ledState = ledState.substring(1); 
-    Serial.println("Led state: "+ledState+" ?");
-    Serial.println("+++");
-    String currentLine = "";                // make a String to hold incoming data from the client
-    while (client.connected()) {            // loop while the client's connected
-      if (client.available()) {             // if there are bytes reading from the client,
-        char c = client.read();             // read a byte, then
-        Serial.write(c);                    // print it out the serial monitor
-        header += c;
-        if (c == '\n') {                    // if the byte is a newline character
-          // if the current line is blank, you got two newline characters in a row.
-          // that's the end of the client HTTP request, so send a response:
-          if (currentLine.length() == 0) {
-            // HTTP headers always start with a response code (e.g. HTTP/1.1 200 OK)
-            // and a content-type so the client knows what's coming, then a blank line:
-            client.println("HTTP/1.1 200 OK");
-            client.println("Content-type:text/html");
-            client.println("Connection: close");
-            client.println();
-            
-            // turns the GPIOs on and off
-            if (header.indexOf("GET /govern/on/LED/on") >= 0) {
-              Serial.println("led 开");
-              ledState = "1";
-              ctlSerial.print("open");
-            } else if (header.indexOf("GET /govern/on/LED/off") >= 0) {
-              Serial.println("led 关");
-              ledState = "0";
-              ctlSerial.print("close");
-            } else if(header.indexOf("GET /govern/on") >= 0){
-              govern = 1;
-              Serial.println("governOn");
-              ctlSerial.print("governOn");
-            } else if(header.indexOf("GET /govern/off") >= 0){
-              govern = 0;
-              Serial.println("governOff");
-              ctlSerial.print("governOff");
-            }
-       
-            // Display the HTML web page
-            client.println("<!DOCTYPE html><html>");
-            client.println("<head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" charset=\"utf-8\">");
-          
-            client.println("<link rel=\"icon\" href=\"data:,\">");
-            // CSS to style the on/off buttons 
-            // Feel free to change the background-color and font-size attributes to fit your preferences
-            client.println("<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}");
-            client.println(".button { background-color: #195B6A; border: none; color: white; padding: 16px 40px;");
-            client.println("text-decoration: none; font-size: 30px; margin: 2px; cursor: pointer;}");
-            client.println(".button2 {background-color: #77878A;}</style></head>");
-            
-            // Web Page Heading
-            client.println("<body><h1>智能灯控系统</h1>");
-            String governStr = govern == 1 ? "开" : "关";
-            client.println("<p>远程管理模式：" + governStr + "</p>");     
-            if (govern == 0) {
-              client.println("<p><a href=\"/govern/on\"><button class=\"button\">开</button></a></p>");
-            } else {
-              client.println("<p><a href=\"/govern/off\"><button class=\"button button2\">关</button></a></p>");
-            } 
-
-            if(govern == 1){   //如果打开了远程管理模式
-              String ledStateStr = ledState == "1" ? "开" : "关";
-              client.println("<p>LED - 当前状态：" + ledStateStr + "</p>");     
-              if (ledState == "0") {
-                client.println("<p><a href=\"/govern/on/LED/on\"><button class=\"button\">开</button></a></p>");
-              } else {
-                client.println("<p><a href=\"/govern/on/LED/off\"><button class=\"button button2\">关</button></a></p>");
-              }  
-             }
-            client.println("</body></html>");
-            
-            // The HTTP response ends with another blank line
-            client.println();
-            // Break out of the while loop
-            break;
-          } else { // if you got a newline, then clear currentLine
-            currentLine = "";
-          }
-        } else if (c != '\r') {  // if you got anything else but a carriage return character,
-          currentLine += c;      // add it to the end of the currentLine
-        }
-      }
+void callback(char *topic, byte *payload, unsigned int length) {
+    Serial.print("Message arrived in topic: ");
+    Serial.println(topic);
+    Serial.print("Message:");
+    for (int i = 0; i < length; i++) {
+      Serial.print((char)payload[i]); // 打印主题内容
     }
-    // Clear the header variable
-    header = "";
-    // Close the connection
-    client.stop();
-  //  Serial.println("Client disconnected.");
-    //Serial.println("");
+    if ((char)payload[0] == '0') {  // 关闭远程控制模式
+        ctlSerial.print('0');
+    }else if ((char)payload[0] == '1') {  // 打开远程控制模式
+        ctlSerial.print('1'); 
+    }else if ((char)payload[0] == '2') {  // 关灯
+        ctlSerial.print('2'); 
+    }else if ((char)payload[0] == '3') {  // 开灯
+        ctlSerial.print('3'); 
+    }
+    Serial.println();
+    Serial.println("-----------------------");
+}
+
+void connect() {
+  while (!mqttClient.connected()) {
+    Serial.printf("The client %s (re)connects to the public mqtt broker\n", client_id.c_str());
+    // Attempt to connect
+    if (mqttClient.connect(client_id.c_str(), mqtt_username, mqtt_password)) {
+      Serial.println("Emqx mqtt broker connected");
+      mqttClient.subscribe(topic2);
+    } else {
+      Serial.print("failed with state ");
+      Serial.print(mqttClient.state());
+      delay(2000);
+   }
   }
 }
 
-void getLedState(){
-    ctlSerial.listen();
-    if(ctlSerial.available() > 0){
-      ledState = ctlSerial.readStringUntil('\r');
-      Serial.println("available!");
-    }
+void loop(){
+  ArduinoOTA.handle();
+
+  Serial.println("111");
+  while(!ctlSerial.available());
+  if(ctlSerial.available()){
+    Serial.println("222");
+    sensorState = ctlSerial.readStringUntil('\r');
+//    ledState = ledState.substring(ledState.length()-1);  // 仅需要最后一个字符
+//    Serial.println("ledState: "+ledState);
+    Serial.println(sensorState);
+  }
+  delay(2000);
+  
+  if (!mqttClient.connected()) {
+    connect();
+  }
+  
+  mqttClient.loop();
+  
+  long now = millis();
+  if (now - lastMsg > 2000) {
+    lastMsg = now;
+//    String msg = "sensor state: "+ledState;
+    mqttClient.publish(topic, sensorState.c_str());
+  }
+  ESP.wdtFeed();  // 喂狗
 }
 
