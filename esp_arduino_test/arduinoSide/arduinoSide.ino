@@ -8,7 +8,6 @@
 #define MAX_DISTANCE 400 // Maximum distance we want to ping for (in centimeters). Maximum sensor distance is rated at 400-500cm
 NewPing sonar(TRIGGER_PIN, ECHO_PIN, MAX_DISTANCE); // NewPing setup of pins and maximum distance.
 
-
 //SoftwareSerial stateSerial(4, 5); //RX=4,TX=5，用于传送relay/led state的软串口
 SoftwareSerial ctlSerial(2, 3);  //RX=2,TX=3,用于控制灯泡开关的软串口
 //继电器
@@ -17,11 +16,18 @@ String lastRelayState, relayState;
 
 // pir sensor
 const int pirSensor = 13;
+
 // 温湿度传感器
 dht DHT;
 const int DHTSensor = 7;
 // 光敏传感器
 const int photocellPin = A0;
+
+String temperature="20.00";
+
+String humidity="58.00";
+
+int photocellValue;
 
 void setup() {
   Serial.begin(9600);
@@ -51,19 +57,28 @@ void motorRun()
         break;
       }
     }
-   Serial.println(relayState);
-   ctlSerial.print(relayState);  //每隔2秒发送一次
+   detectEnv();
+   String sensorState = "{\"ledState\": " + relayState + ",\"temperature\": " + temperature + ",\"humidity\": " + humidity + ",\"light\": " + photocellValue + "}";
+   Serial.println(sensorState);
+   ctlSerial.print(sensorState);  //每隔1秒发送一次
    //...
-   delay(1000);
+   delay(1200);  //2000
   }
+}
+
+void detectEnv(){
+  DHT.read11(DHTSensor);
+  temperature = String(DHT.temperature);
+  humidity = String(DHT.humidity);
+  photocellValue = analogRead(photocellPin);
+  if(photocellValue<500) photocellValue = 500-photocellValue;
+  else if(photocellValue>=500 && photocellValue<800) photocellValue = 800-photocellValue;
+  else if(photocellValue>=800 && photocellValue<1000) photocellValue = 1000-photocellValue;
 }
 
 void loop() {
   
-  DHT.read11(DHTSensor);
-  String temperature = String(DHT.temperature);
-  String humidity = String(DHT.humidity);
-  int photocellValue = analogRead(photocellPin);
+  detectEnv();  //检测环境信息
   
   ctlSerial.listen();   //开启软串口监听状态
   if (ctlSerial.available() > 0 ) 
@@ -75,6 +90,7 @@ void loop() {
         motorRun();
      }
   }else{
+   //人体目标检测
    delay(100);   // Wait 50ms between pings (about 20 pings/sec). 29ms should be the shortest delay between pings.
    unsigned int roundTripTime = sonar.ping(); // Send ping, get ping time in microseconds (uS).
    int distance = roundTripTime / US_ROUNDTRIP_CM;  // Convert ping time to distance in cm and print result (0 = outside set distance range)
@@ -94,6 +110,6 @@ void loop() {
    Serial.println(sensorState);
    ctlSerial.print(sensorState);  //每隔3秒发送一次
    //...
-   delay(3000);
+   delay(1200);  //2000
 }
 

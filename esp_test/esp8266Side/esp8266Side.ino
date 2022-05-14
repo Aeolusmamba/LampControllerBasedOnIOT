@@ -12,11 +12,11 @@ const char* password = "123456li";
 
 // MQTT Broker
 const char *mqtt_broker = "124.222.94.149";
-const char *topic = "lamp";
-const char *topic2 = "ctl";
+const int mqtt_port = 1883;
+const char *topic = "lamp";  //发布主题lamp
+const char *topic2 = "ctl";  //订阅主题ctl
 const char *mqtt_username = "admin";
 const char *mqtt_password = "123312";
-const int mqtt_port = 1883;
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -49,6 +49,7 @@ void setup() {
   client_id += String(WiFi.macAddress());
   //set mqtt broker
   mqttClient.setServer(mqtt_broker, mqtt_port);
+  mqttClient.setKeepAlive(10); // 设置心跳间隔时间
   mqttClient.setCallback(callback);  // 设定回调方法，当ESP8266收到订阅消息时会调用此方法
   sensorState = "null";
 
@@ -106,16 +107,16 @@ void loop(){
 //    Serial.println("ledState: "+ledState);
     Serial.println(sensorState);
   }
-  delay(2000);
+  delay(100);  //2000
   
   if (!mqttClient.connected()) {
     connect();
   }
   
-  mqttClient.loop();
+  mqttClient.loop();  //执行到这里才能调用回调函数
   
   long now = millis();
-  if (now - lastMsg > 2000) {
+  if (now - lastMsg > 100) {  //1000+2000=5.5s   500+1500=4.5s  
     lastMsg = now;
 //    String msg = "sensor state: "+ledState;
     mqttClient.publish(topic, sensorState.c_str());
